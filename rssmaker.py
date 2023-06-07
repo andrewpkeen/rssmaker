@@ -92,7 +92,7 @@ class DekuDealsParser(HTMLParser):
                     self.state = _State.IN_NAME
                     self.div_level = 2
                 elif class_attr == 'w-100':
-                    guid = ET.SubElement(self.item, 'guid')
+                    guid = ET.SubElement(self.item, 'guid', {'isPermaLink': 'false'})
                     guid.text = self.item_hash.hexdigest()
                     if guid.text == self.latest_guid:
                         self.done = True
@@ -165,10 +165,17 @@ def execute():
             break
     if parser.changed:
         print(str(parser.index - 5), "new items")
+        guids = set()
         items = parser.channel.findall('item')
-        if len(items) > MAX_ITEMS:
-            for i in range(MAX_ITEMS, len(items)):
+        for i in range(len(items)):
+            if i >= MAX_ITEMS:
                 parser.channel.remove(items[i])
+            else:
+                guid = items[i].findtext('guid')
+                if guid in guids:
+                    parser.channel.remove(items[i])
+                else:
+                    guids.add(guid)
         parser.etree.write(xml_file)
     else:
         print('Nothing new, no updates to file')
