@@ -149,19 +149,21 @@ class DekuDealsParser(HTMLParser):
                 self.description.text += data
                 self.item_hash.update(data.encode())
 
-parser = None
-for i in range(1, MAX_PAGES + 1):
-    req = Request(base_url + page + '?page=' + str(i), headers=hdr)
-    with urlopen(req) as repsonse:
-        if not parser:
-            parser = DekuDealsParser(repsonse.getheader('Date'))
-        while not parser.done and (data := repsonse.read()):
-            parser.feed(data.decode())
-    if parser.done:
-        break
-if parser.changed:
-    print(str(parser.index - 5), "new items")
-    parser.etree.write(xml_file)
-else:
-    print('Nothing new, no updates to file')
+def execute():
+    parser = None
+    for i in range(1, MAX_PAGES + 1):
+        req = Request(base_url + page + '?page=' + str(i), headers=hdr)
+        with urlopen(req) as repsonse:
+            if not parser:
+                parser = DekuDealsParser(repsonse.getheader('Date'))
+            while not parser.done and (data := repsonse.read()):
+                parser.feed(data.decode())
+        if parser.done:
+            break
+    if parser.changed:
+        print(str(parser.index - 5), "new items")
+        parser.etree.write(xml_file)
+    else:
+        print('Nothing new, no updates to file')
+    return parser.changed
 
