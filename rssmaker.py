@@ -155,7 +155,9 @@ def execute():
         req = Request(base_url + page + '?page=' + str(i), headers=hdr)
         with urlopen(req) as repsonse:
             if not parser:
-                parser = DekuDealsParser(repsonse.getheader('Date'))
+                date = repsonse.getheader('Date')
+                print ("Parsing update at", date)
+                parser = DekuDealsParser(date)
             while not parser.done and (data := repsonse.read()):
                 parser.feed(data.decode())
         if parser.done:
