@@ -11,9 +11,12 @@ hdr = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
        'Accept-Language': 'en-US,en;q=0.8'}
 
+atom_uri = 'http://www.w3.org/2005/Atom'
+
 base_url = 'https://www.dekudeals.com'
 page = '/recent-drops?country=us'
 xml_file = 'dekudeals.xml'
+self_link = 'https://raw.githubusercontent.com/andrewpkeen/rssmaker/master/dekudeals.xml'
 
 class _State(Enum):
     IN_TITLE = 1
@@ -33,6 +36,7 @@ class DekuDealsParser(HTMLParser):
 
     def __init__(self, date):
         super().__init__()
+
         try:
             self.etree = ET.parse(xml_file)
             print('Using existing', xml_file, 'file')
@@ -55,12 +59,17 @@ class DekuDealsParser(HTMLParser):
 
         self.pubDate = date
 
+        atom_link = get_or_create_subelement(self.channel, f'{{{atom_uri}}}link', 3)
+        atom_link.set('href', self_link)
+        atom_link.set('rel', 'self')
+        atom_link.set('type', 'application/rss+xml')
+
         if latest_item := self.channel.find('item'):
             self.latest_guid = latest_item.find('guid').text
         else:
             self.latest_guid = None
 
-        self.index = 5
+        self.index = 6
         self.item = None
         self.item_hash = None
         self.description = None
@@ -151,6 +160,7 @@ class DekuDealsParser(HTMLParser):
                 self.item_hash.update(data.encode())
 
 def execute():
+    ET.register_namespace('atom', atom_uri)
     parser = None
     for i in range(1, MAX_PAGES + 1):
         req = Request(base_url + page + '&page=' + str(i), headers=hdr)
