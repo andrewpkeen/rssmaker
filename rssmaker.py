@@ -152,7 +152,7 @@ class DekuDealsParser(HTMLParser):
 def execute():
     parser = None
     for i in range(1, MAX_PAGES + 1):
-        req = Request(base_url + page + '?page=' + str(i), headers=hdr)
+        req = Request(base_url + page + '&page=' + str(i), headers=hdr)
         with urlopen(req) as repsonse:
             if not parser:
                 date = repsonse.getheader('Date')
