@@ -3,7 +3,7 @@ from subprocess import run
 import time
 
 git = r'C:\Program Files\Git\bin\git.exe'
-sleep_in_minutes = 5
+sleep_in_minutes = 15
 
 while True:
     if rssmaker.execute():

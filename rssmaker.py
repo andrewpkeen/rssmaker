@@ -4,7 +4,8 @@ from html.parser import HTMLParser
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-MAX_PAGES = 24
+MAX_ITEMS = 540
+MAX_PAGES = 15
 
 hdr = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -164,6 +165,10 @@ def execute():
             break
     if parser.changed:
         print(str(parser.index - 5), "new items")
+        items = parser.channel.findall('item')
+        if len(items) > MAX_ITEMS:
+            for i in range(MAX_ITEMS, len(items)):
+                parser.channel.remove(items[i])
         parser.etree.write(xml_file)
     else:
         print('Nothing new, no updates to file')
