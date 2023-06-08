@@ -1,17 +1,24 @@
 from enum import Enum
-from hashlib import md5
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
+from re import compile, sub
 from urllib.request import Request, urlopen
+from uuid import uuid4
 import xml.etree.ElementTree as ET
 
-MAX_ITEMS = 540
-MAX_PAGES = 15
+MAX_ITEMS = 360
+MAX_PAGES = 10
+
+ITEM_START_INDEX = 6
 
 hdr = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
        'Accept-Language': 'en-US,en;q=0.8'}
 
 atom_uri = 'http://www.w3.org/2005/Atom'
+
+setback_re = compile(r'\n(?P<value>\d+) (?P<units>[a-z]+)\nago\nat\n(?P<retailer>.+)\n')
+time_format = '%a, %d %b %Y %H:%M:%S %Z'
 
 base_url = 'https://www.dekudeals.com'
 page = '/recent-drops?country=us'
@@ -21,7 +28,7 @@ self_link = 'https://raw.githubusercontent.com/andrewpkeen/rssmaker/master/dekud
 class _State(Enum):
     IN_TITLE = 1
     IN_NAME = 2
-    IN_DESCRIPTION = 3
+    IN_SETBACK = 3
 
 def get_or_create_subelement(element, tag, index = None):
     if (subelement := element.find(tag)) is None:
@@ -32,10 +39,15 @@ def get_or_create_subelement(element, tag, index = None):
             element.insert(index, subelement)
     return subelement
 
+def make_datetime(datetimestr):
+    return datetime.strptime(datetimestr, time_format).replace(tzinfo=timezone(timedelta(0), 'GMT'))
+
 class DekuDealsParser(HTMLParser):
 
     def __init__(self, date):
         super().__init__()
+
+        self.known_items = {}
 
         try:
             self.etree = ET.parse(xml_file)
@@ -48,14 +60,20 @@ class DekuDealsParser(HTMLParser):
             self.rss.set('version', '2.0')
 
         self.channel = get_or_create_subelement(self.rss, 'channel')
+        items = self.channel.findall('item')
+        for i in range(len(items)):
+            if i < MAX_ITEMS:
+                self.known_items[items[i].findtext('link')] = items[i]
+            else:
+                self.channel.remove(items[i])
+        print('Pre-existing items:', len(self.known_items))
 
         link = get_or_create_subelement(self.channel, 'link')
         link.text = base_url + page
 
         pubDate = get_or_create_subelement(self.channel, 'pubDate')
-        pubDate.text = date
         lastBuildDate = get_or_create_subelement(self.channel, 'lastBuildDate')
-        lastBuildDate.text = date
+        lastBuildDate.text = pubDate.text = date.strftime(time_format)
 
         self.pubDate = date
 
@@ -64,15 +82,10 @@ class DekuDealsParser(HTMLParser):
         atom_link.set('rel', 'self')
         atom_link.set('type', 'application/rss+xml')
 
-        if latest_item := self.channel.find('item'):
-            self.latest_guid = latest_item.find('guid').text
-        else:
-            self.latest_guid = None
-
-        self.index = 6
+        self.index = ITEM_START_INDEX
         self.item = None
-        self.item_hash = None
         self.description = None
+        self.setback = None
         self.state = None
         self.div_level = 0
         self.done = False
@@ -92,19 +105,15 @@ class DekuDealsParser(HTMLParser):
             case 'div':
                 if class_attr == 'position-relative':
                     self.item = ET.Element('item')
-                    self.item_hash = md5()
                     self.description = ET.SubElement(self.item, 'description')
                     self.description.text = ''
-                    ET.SubElement(self.item, 'pubDate').text = self.pubDate
+                    self.setback = ''
                     self.div_level = 1
                 elif class_attr == 'h6 name':
                     self.state = _State.IN_NAME
                     self.div_level = 2
                 elif class_attr == 'w-100':
-                    guid = ET.SubElement(self.item, 'guid', {'isPermaLink': 'false'})
-                    guid.text = self.item_hash.hexdigest()
-                    if guid.text == self.latest_guid:
-                        self.done = True
+                    self.state = _State.IN_SETBACK
                     self.div_level = 2
                 elif self.div_level > 0:
                     self.div_level += 1
@@ -112,7 +121,6 @@ class DekuDealsParser(HTMLParser):
                 link = ET.Element('link')
                 link.text = base_url + attr_dict['href']
                 self.item.insert(0, link)
-                self.item_hash.update(link.text.encode())
             case 'img' if class_attr and class_attr.startswith('responsive-img shadow-img'):
                 enclosure = ET.SubElement(self.item, 'enclosure')
                 url = attr_dict['src']
@@ -121,27 +129,58 @@ class DekuDealsParser(HTMLParser):
                 with urlopen(imgReq) as response:
                     enclosure.set('length', response.getheader('Content-Length'))
                     enclosure.set('type', response.getheader('Content-Type'))
-        if self.div_level > 1 and self.state != _State.IN_NAME:
-            self.description.text += '<' + tag + '>'
+            case _ if self.div_level > 1:
+                self.description.text += f'<{tag}>'
                 
     def handle_endtag(self, tag):
         if self.done:
             return
         
-        if self.div_level > 1 and self.state != _State.IN_NAME:
-            self.description.text += '</' + tag + '>'
-
-        self.state = None
-
-        if tag == 'div' and self.div_level > 0:
-            self.div_level -= 1
-            if self.div_level == 0:
-                self.channel.insert(self.index, self.item)
-                self.index += 1
-                self.changed = True
-                self.item = None
-                self.item_hash = None
-                self.description = None
+        match tag:
+            case 'title':
+                self.state = None
+            case 'div':
+                if self.div_level > 0:
+                    if self.state == _State.IN_SETBACK:
+                        setback_m = setback_re.match(self.setback)
+                        pubDate = ET.SubElement(self.item, 'pubDate')
+                        units = setback_m.group('units')
+                        if units[-1] != 's':
+                            units += 's'
+                        td = timedelta(**{units: int(setback_m.group('value'))})
+                        pubDate.text = (self.pubDate - td).strftime(time_format)
+                        self.description.text += f' at {setback_m.group("retailer")} '
+                    self.state = None
+                    self.div_level -= 1
+                    if self.div_level == 0:
+                        self.description.text = sub('\s+', ' ', self.description.text).strip()
+                        create_item = False
+                        known_item = self.known_items.get(self.item.findtext('link'))
+                        if known_item:
+                            if self.description.text != known_item.findtext('description'):
+                                self.channel.remove(known_item)
+                                create_item = True
+                            else:
+                                ni_time = make_datetime(self.item.findtext('pubDate'))
+                                ki_time = make_datetime(known_item.findtext('pubDate'))
+                                if ni_time > ki_time + timedelta(hours=1):
+                                    self.channel.remove(known_item)
+                                    create_item = True
+                                else:
+                                    self.done = True
+                        else:
+                            create_item = True
+                        if create_item:
+                            guid = ET.SubElement(self.item, 'guid', {'isPermaLink': 'false'})
+                            guid.text = str(uuid4())
+                            self.channel.insert(self.index, self.item)
+                            self.index += 1
+                            self.changed = True
+                        self.item = None
+                        self.description = None
+                        self.setback = None
+            case _ if self.div_level > 1:
+                self.description.text += f'</{tag}>'
 
     def handle_data(self, data):
         if self.done:
@@ -155,37 +194,28 @@ class DekuDealsParser(HTMLParser):
                 title = ET.Element('title')
                 title.text = data;
                 self.item.insert(0, title)
+            case _State.IN_SETBACK:
+                if self.div_level == 3:
+                    self.setback += data
             case _ if self.div_level > 1:
                 self.description.text += data
-                self.item_hash.update(data.encode())
 
 def execute():
     ET.register_namespace('atom', atom_uri)
     parser = None
     for i in range(1, MAX_PAGES + 1):
-        req = Request(base_url + page + '&page=' + str(i), headers=hdr)
+        req = Request(base_url + page + f'&page={i}', headers=hdr)
         with urlopen(req) as repsonse:
             if not parser:
-                date = repsonse.getheader('Date')
-                print ("Parsing update at", date)
+                date = make_datetime(repsonse.getheader('Date'))
+                print (f"Parsing update at {date:{time_format}}")
                 parser = DekuDealsParser(date)
             while not parser.done and (data := repsonse.read()):
                 parser.feed(data.decode())
         if parser.done:
             break
     if parser.changed:
-        print(str(parser.index - 5), "new items")
-        guids = set()
-        items = parser.channel.findall('item')
-        for i in range(len(items)):
-            if i >= MAX_ITEMS:
-                parser.channel.remove(items[i])
-            else:
-                guid = items[i].findtext('guid')
-                if guid in guids:
-                    parser.channel.remove(items[i])
-                else:
-                    guids.add(guid)
+        print(str(parser.index - ITEM_START_INDEX), "new items")
         parser.etree.write(xml_file)
     else:
         print('Nothing new, no updates to file')
