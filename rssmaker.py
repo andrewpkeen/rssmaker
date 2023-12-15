@@ -3,11 +3,12 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from re import compile, sub
 from urllib.request import Request, urlopen
+from urllib.error import URLError
 from uuid import uuid4
 import xml.etree.ElementTree as ET
 
-MAX_ITEMS = 360
-MAX_PAGES = 10
+MAX_ITEMS = 1067
+MAX_PAGES = 36
 
 ITEM_START_INDEX = 6
 
@@ -204,20 +205,31 @@ def execute():
     ET.register_namespace('atom', atom_uri)
     parser = None
     for i in range(1, MAX_PAGES + 1):
-        req = Request(base_url + page + f'&page={i}', headers=hdr)
-        with urlopen(req) as repsonse:
-            if not parser:
-                date = make_datetime(repsonse.getheader('Date'))
-                print (f"Parsing update at {date:{time_format}}")
-                parser = DekuDealsParser(date)
-            while not parser.done and (data := repsonse.read()):
-                parser.feed(data.decode())
+        page_url = base_url + page + f'&page={i}'
+        req = Request(page_url, headers=hdr)
+        try:
+            with urlopen(req) as repsonse:
+                if not parser:
+                    date = make_datetime(repsonse.getheader('Date'))
+                    print (f"Parsing update at {date:{time_format}}")
+                    parser = DekuDealsParser(date)
+                while not parser.done and (data := repsonse.read()):
+                    parser.feed(data.decode())
+        except URLError:
+            print("Failed to open", page_url)
+            if parser and parser.changed:
+                print(str(parser.index - ITEM_START_INDEX), "new items")
+                parser.etree.write(xml_file)
+                print('Wrote to file. Quitting early.')
+                exit(221)
+            else:
+                break
         if parser.done:
             break
-    if parser.changed:
+    if parser and parser.changed:
         print(str(parser.index - ITEM_START_INDEX), "new items")
         parser.etree.write(xml_file)
     else:
         print('Nothing new, no updates to file')
-    return parser.changed
+    return parser and parser.changed
 
