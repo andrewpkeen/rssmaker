@@ -91,6 +91,7 @@ class DekuDealsParser(HTMLParser):
         self.div_level = 0
         self.done = False
         self.changed = False
+        self.units = 'microseconds'
 
     def handle_starttag(self, tag, attrs):
         if self.done:
@@ -145,10 +146,10 @@ class DekuDealsParser(HTMLParser):
                     if self.state == _State.IN_SETBACK:
                         setback_m = setback_re.match(self.setback)
                         pubDate = ET.SubElement(self.item, 'pubDate')
-                        units = setback_m.group('units')
-                        if units[-1] != 's':
-                            units += 's'
-                        td = timedelta(**{units: int(setback_m.group('value'))})
+                        self.units = setback_m.group('units')
+                        if self.units[-1] != 's':
+                            self.units += 's'
+                        td = timedelta(**{self.units: int(setback_m.group('value'))})
                         pubDate.text = (self.pubDate - td).strftime(time_format)
                         self.description.text += f' at {setback_m.group("retailer")} '
                     self.state = None
@@ -156,16 +157,19 @@ class DekuDealsParser(HTMLParser):
                     if self.div_level == 0:
                         self.description.text = sub('\s+', ' ', self.description.text).strip()
                         create_item = False
-                        known_item = self.known_items.get(self.item.findtext('link'))
+                        link = self.item.findtext('link')
+                        known_item = self.known_items.get(link)
                         if known_item:
                             if self.description.text != known_item.findtext('description'):
                                 self.channel.remove(known_item)
+                                del self.known_items[link]
                                 create_item = True
                             else:
                                 ni_time = make_datetime(self.item.findtext('pubDate'))
                                 ki_time = make_datetime(known_item.findtext('pubDate'))
-                                if ni_time > ki_time + timedelta(hours=1):
+                                if ni_time > ki_time + timedelta(**{self.units: 1}):
                                     self.channel.remove(known_item)
+                                    del self.known_items[link]
                                     create_item = True
                                 else:
                                     self.done = True
@@ -175,6 +179,7 @@ class DekuDealsParser(HTMLParser):
                             guid = ET.SubElement(self.item, 'guid', {'isPermaLink': 'false'})
                             guid.text = str(uuid4())
                             self.channel.insert(self.index, self.item)
+                            self.known_items[link] = self.item
                             self.index += 1
                             self.changed = True
                         self.item = None
